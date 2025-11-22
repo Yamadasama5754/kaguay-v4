@@ -2,9 +2,9 @@
   "name": "kaguya-bot",
   "version": "1.0.0",
   "type": "module",
-  "main": "index.js",
+  "main": "server.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node server.js"
   },
   "dependencies": {
     "@vitalets/google-translate-api": "^9.2.1",
