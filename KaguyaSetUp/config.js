@@ -1,6 +1,6 @@
 export default {
     "prefix": "*", 
-    "BOT_NAME": "ⓜⓘⓚⓞ",
+    "BOT_NAME": "mirai",
     "ADMIN_IDS": ["100092990751389"],
     "botEnabled": true,
     "autogreet": true, // تمت إضافة هذه الخاصية
