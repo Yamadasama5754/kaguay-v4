@@ -2,10 +2,10 @@
   "name": "kaguya-v4",
   "version": "1.0.0",
   "description": "Kaguya Messenger Bot",
-  "main": "server.js",
+  "main": "index.js",
   "type": "module",
   "scripts": {
-    "start": "node server.js"
+    "start": "node index.js"
   },
   "author": "Arjhil",
   "license": "ISC",
