@@ -1,14 +1,11 @@
 {
-  "name": "kaguya-v4",
+  "name": "kaguya-bot",
   "version": "1.0.0",
-  "description": "Kaguya Messenger Bot",
-  "main": "index.js",
   "type": "module",
+  "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
-  "author": "Arjhil",
-  "license": "ISC",
   "dependencies": {
     "@vitalets/google-translate-api": "^9.2.1",
     "@xaviabot/fb-downloader": "^1.0.14",
