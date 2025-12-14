@@ -1,9 +1,9 @@
-// استيراد الحزم والملفات الضرورية
+// ================== Imports ==================
 import fs from "fs";
+import http from "http";
 import login from "./logins/fcax/fb-chat-api/index.js";
 import { listen } from "./listen/listen.js";
 import { commandMiddleware, eventMiddleware } from "./middleware/index.js";
-import sleep from "time-sleep";
 import { log, notifer } from "./logger/index.js";
 import gradient from "gradient-string";
 import config from "./BeatriceSetUp/config.js";
@@ -11,7 +11,11 @@ import EventEmitter from "events";
 import axios from "axios";
 import semver from "semver";
 
-// تشغيل السيرفر HTTP ليبقي البوت نشط على Render
+// ================== Globals ==================
+global.botActive = true;
+global.instanceID = process.env.INSTANCE_ID || Date.now().toString();
+
+// ================== HTTP Keep Alive ==================
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
   res.writeHead(200, { "Content-Type": "text/plain" });
@@ -20,95 +24,122 @@ http.createServer((req, res) => {
   console.log(`✅ Server running on port ${PORT}`);
 });
 
+// ================== Utils ==================
+const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// ================== Core Class ==================
 class Beatrice extends EventEmitter {
   constructor() {
     super();
+
     this.on("system:error", (err) => {
-      log([{ message: "[ ERROR ]: ", color: "red" }, { message: `Error! An error occurred: ${err}`, color: "white" }]);
-      process.exit(1);
+      log([
+        { message: "[ ERROR ]: ", color: "red" },
+        { message: err?.stack || err?.message || String(err), color: "white" }
+      ]);
     });
+
     this.currentConfig = config;
-    this.credentials = fs.readFileSync("./BeatriceSetUp/BeatriceState.json");
-    this.package = JSON.parse(fs.readFileSync("./package.json"));
+    this.credentials = fs.readFileSync(
+      "./BeatriceSetUp/BeatriceState.json",
+      "utf8"
+    );
+    this.package = JSON.parse(fs.readFileSync("./package.json", "utf8"));
+
     this.checkCredentials();
   }
 
+  // ================== Credentials ==================
   checkCredentials() {
     try {
-      const credentialsArray = JSON.parse(this.credentials);
-      if (!Array.isArray(credentialsArray) || credentialsArray.length === 0) {
-        this.emit("system:error", "Fill in appstate in BeatriceSetUp/BeatriceState.json!");
-        process.exit(0);
+      const parsed = JSON.parse(this.credentials);
+      if (!Array.isArray(parsed) || !parsed.length) {
+        throw new Error("AppState فارغ");
       }
-    } catch (error) {
-      this.emit("system:error", "Cannot parse JSON credentials in BeatriceSetUp/BeatriceState.json");
+    } catch {
+      this.emit(
+        "system:error",
+        "❌ فشل قراءة BeatriceState.json (AppState غير صالح)"
+      );
+      process.exit(1);
     }
   }
-async checkVersion() {
+
+  // ================== Version Check ==================
+  async checkVersion() {
     try {
-        const pinkGradient = gradient(["#ff00ff", "#ff99ff"]); // تدرج لوني وردي
-        console.log(pinkGradient(`       
-█▄▀ ▄▀█ █▀▀ █░█ █▄█ ▄▀█
-█░█ █▀█ █▄█ █▄█ ░█░ █▀█
-`));
+      console.log(
+        gradient(["#ff00ff", "#ff99ff"])(`
+█▀█ █▀█ █▀▀ █▀▀ █▀█ █ █▀█ █▀▀
+█▄█ █▀▄ ██▄ █▄█ █▄█ █ █▄█ ██▄
+`)
+      );
 
-        console.log(`${gradient(["#ff99ff", "#ff00ff"])("[ owner ]: ")} ${gradient("cyan", "pink")("HUSSEIN YACOUBI")}`);
-        console.log(`${gradient(["#ff99ff", "#ff00ff"])("[ Facebook ]: ")} ${gradient("cyan", "pink")("https://www.facebook.com/share/15EQBXgrmV/")}`);
+      console.log(
+        gradient(["#00ffff", "#ff00ff"])("✨ Developed by: Yamada KJ ✨")
+      );
 
-        const { data } = await axios.get("https://raw.githubusercontent.com/Tshukie/Kaguya-Pr0ject/master/package.json");
-        if (semver.lt(this.package.version, (data.version ??= this.package.version))) {
-            log([{ message: "[ SYSTEM ]: ", color: "yellow" }, { message: `New Update: contact the owner`, color: "white" }]);
+      try {
+        const { data } = await axios.get(
+          "https://raw.githubusercontent.com/Tshukie/Beatrice-Pr0ject/master/package.json",
+          { timeout: 5000 }
+        );
+        if (semver.lt(this.package.version, data.version)) {
+          log([
+            { message: "[ SYSTEM ]: ", color: "yellow" },
+            { message: "New update available", color: "white" }
+          ]);
         }
+      } catch {
+        // تجاهل فشل الفحص
+      }
 
-        this.emit("system:run"); // تشغيل النظام مباشرة بدون إطار متحرك
+      this.emit("system:run");
     } catch (err) {
-        this.emit("system:error", err);
+      this.emit("system:error", err);
     }
-}
+  }
 
+  // ================== Load Commands & Events ==================
   async loadComponents() {
-    let failedCount = 0;
+    let failed = 0;
 
-    // تحميل الأوامر
     try {
       await commandMiddleware();
-      console.log(`✔ Loaded ${global.client.commands.size} commands.`);
-    } catch (err) {
-      failedCount++;
-      console.error(`❌ Failed to load commands: ${err.message}`);
+      console.log(`✔ Commands loaded: ${global.client.commands.size}`);
+    } catch (e) {
+      failed++;
+      console.error("❌ Commands load failed:", e.message);
     }
 
-    // تحميل الأحداث
     try {
       await eventMiddleware();
-      console.log(`✔ Loaded ${global.client.events.size} events.`);
-    } catch (err) {
-      failedCount++;
-      console.error(`❌ Failed to load events: ${err.message}`);
+      console.log(`✔ Events loaded: ${global.client.events.size}`);
+    } catch (e) {
+      failed++;
+      console.error("❌ Events load failed:", e.message);
     }
 
-    // طباعة ملخص التحميل
-    console.log("=".repeat(50));
-    console.log(`✔ Total commands loaded: ${global.client.commands.size}`);
-    console.log(`✔ Total events loaded: ${global.client.events.size}`);
-    if (failedCount > 0) {
-      console.log(`❌ Failed to load ${failedCount} component(s).`);
-    } else {
-      console.log("✔ All components loaded successfully!");
-    }
-    console.log("=".repeat(50));
+    console.log("=".repeat(40));
+    console.log(`✔ Commands: ${global.client.commands.size}`);
+    console.log(`✔ Events: ${global.client.events.size}`);
+    console.log(failed ? `❌ Failed: ${failed}` : "✔ All loaded successfully");
+    console.log("=".repeat(40));
   }
 
+  // ================== Start ==================
   start() {
+    // ===== Process Title =====
     setInterval(() => {
       const t = process.uptime();
-      const [i, a, m] = [Math.floor(t / 3600), Math.floor((t % 3600) / 60), Math.floor(t % 60)].map((num) => (num < 10 ? "0" + num : num));
-      const formatMemoryUsage = (data) => `${Math.round((data / 1024 / 1024) * 100) / 100} MB`;
-      const memoryData = process.memoryUsage();
-      process.title = `Kaguya Project - Author: Arjhil Dacayanan - ${i}:${a}:${m} - External: ${formatMemoryUsage(memoryData.external)}`;
+      const h = String(Math.floor(t / 3600)).padStart(2, "0");
+      const m = String(Math.floor((t % 3600) / 60)).padStart(2, "0");
+      const s = String(Math.floor(t % 60)).padStart(2, "0");
+      process.title = `Beatrice | ${h}:${m}:${s}`;
     }, 1000);
 
     (async () => {
+      // ===== Global Client =====
       global.client = {
         commands: new Map(),
         events: new Map(),
@@ -116,51 +147,56 @@ async checkVersion() {
         aliases: new Map(),
         handler: {
           reply: new Map(),
-          reactions: new Map(),
+          reactions: new Map()
         },
-        config: this.currentConfig,
+        config: this.currentConfig
       };
 
-      await this.loadComponents(); // استدعاء دالة التحميل
+      await this.loadComponents();
+      await this.checkVersion();
 
-      this.checkVersion();
-
+      // ===== On Run =====
       this.on("system:run", () => {
-        login({ appState: JSON.parse(this.credentials) }, async (err, api) => {
-          if (err) this.emit("system:error", err);
+        login(
+          { appState: JSON.parse(this.credentials) },
+          async (err, api) => {
+            if (err) {
+              this.emit("system:error", err);
+              return;
+            }
 
-          api.setOptions(this.currentConfig.options);
+            api.setOptions(this.currentConfig.options);
 
-          const listenMqtt = async () => {
+            // ✅ طباعة ID الحساب
             try {
-              if (!listenMqtt.isListening) {
-                listenMqtt.isListening = true;
+              const user = await api.getCurrentUserID();
+              console.log(`🤖 Bot logged in as ID: ${user}`);
+            } catch {}
+
+            // ===== MQTT Loop =====
+            while (global.botActive) {
+              try {
                 const mqtt = await api.listenMqtt(async (err, event) => {
-                  if (err) this.on("error", err);
+                  if (err) return;
+                  if (!global.botActive) return;
                   await listen({ api, event, client: global.client });
                 });
-                await sleep(this.currentConfig.mqtt_refresh);
-                notifer("[ MQTT ]", "Mqtt refresh in progress!");
-                log([{ message: "[ MQTT ]: ", color: "yellow" }, { message: `Refresh mqtt in progress!`, color: "white" }]);
-                await mqtt.stopListening();
-                await sleep(5000);
-                notifer("[ MQTT ]", "Refresh successful!");
-                log([{ message: "[ MQTT ]: ", color: "green" }, { message: `Refresh successful!`, color: "white" }]);
-                listenMqtt.isListening = false;
-              }
-              listenMqtt();
-            } catch (error) {
-              this.emit("system:error", error);
-            }
-          };
 
-          listenMqtt.isListening = false;
-          listenMqtt();
-        });
+                await delay(this.currentConfig.mqtt_refresh || 600000);
+                mqtt.stopListening();
+                await delay(5000);
+              } catch (e) {
+                this.emit("system:error", e);
+                await delay(10000);
+              }
+            }
+          }
+        );
       });
     })();
   }
 }
 
+// ================== Boot ==================
 const BeatriceInstance = new Beatrice();
 BeatriceInstance.start();
