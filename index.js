@@ -41,7 +41,7 @@ class Beatrice extends EventEmitter {
         process.exit(0);
       }
     } catch (error) {
-      this.emit("system:error", "Cannot parse JSON credentials in KaguyaSetUp/KaguyaState.json");
+      this.emit("system:error", "Cannot parse JSON credentials in BeatriceSetUp/BeatriceState.json");
     }
   }
 async checkVersion() {
