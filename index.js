@@ -6,12 +6,21 @@ import { commandMiddleware, eventMiddleware } from "./middleware/index.js";
 import sleep from "time-sleep";
 import { log, notifer } from "./logger/index.js";
 import gradient from "gradient-string";
-import config from "./KaguyaSetUp/config.js";
+import config from "./BeatriceSetUp/config.js";
 import EventEmitter from "events";
 import axios from "axios";
 import semver from "semver";
 
-class Kaguya extends EventEmitter {
+// تشغيل السيرفر HTTP ليبقي البوت نشط على Render
+const PORT = process.env.PORT || 3000;
+http.createServer((req, res) => {
+  res.writeHead(200, { "Content-Type": "text/plain" });
+  res.end("Bot is alive!");
+}).listen(PORT, () => {
+  console.log(`✅ Server running on port ${PORT}`);
+});
+
+class Beatrice extends EventEmitter {
   constructor() {
     super();
     this.on("system:error", (err) => {
@@ -19,7 +28,7 @@ class Kaguya extends EventEmitter {
       process.exit(1);
     });
     this.currentConfig = config;
-    this.credentials = fs.readFileSync("./KaguyaSetUp/KaguyaState.json");
+    this.credentials = fs.readFileSync("./BeatriceSetUp/BeatriceState.json");
     this.package = JSON.parse(fs.readFileSync("./package.json"));
     this.checkCredentials();
   }
@@ -28,7 +37,7 @@ class Kaguya extends EventEmitter {
     try {
       const credentialsArray = JSON.parse(this.credentials);
       if (!Array.isArray(credentialsArray) || credentialsArray.length === 0) {
-        this.emit("system:error", "Fill in appstate in KaguyaSetUp/KaguyaState.json!");
+        this.emit("system:error", "Fill in appstate in BeatriceSetUp/BeatriceState.json!");
         process.exit(0);
       }
     } catch (error) {
@@ -153,5 +162,5 @@ async checkVersion() {
   }
 }
 
-const KaguyaInstance = new Kaguya();
-KaguyaInstance.start();
+const BeatriceInstance = new Beatrice();
+BeatriceInstance.start();
