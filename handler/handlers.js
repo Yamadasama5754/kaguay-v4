@@ -60,18 +60,8 @@ export class CommandHandler {
     const args = event.args || [];
 
     try {
-      /* ========= Prefix ========= */
-      let prefix = this.config.prefix || ".";
-      let threadData = null;
-
-      try {
-        threadData = await Threads.find(threadID);
-        if (threadData?.data?.prefix) prefix = threadData.data.prefix;
-      } catch (e) {
-        console.warn("⚠️ Thread DB error:", e.message);
-      }
-
-      /* ========= onChat ========= */
+      /* ========= onChat (المهام الخلفية) ========= */
+      // يتم تشغيلها مع كل رسالة (مثل نظام الليفل أو الرد التلقائي)
       const onChatTasks = [];
       for (const [name, cmd] of this.commands) {
         if (cmd?.onChat) {
@@ -83,7 +73,8 @@ export class CommandHandler {
       }
       await Promise.all(onChatTasks);
 
-      /* ========= Reply ========= */
+      /* ========= Reply System ========= */
+      // التعامل مع الردود إذا لم يكن هناك أمر صريح
       if (!commandName && event.type === "message_reply") {
         const reply = this.handler.reply.get(event.messageReply?.messageID);
         if (reply?.name) {
@@ -95,14 +86,20 @@ export class CommandHandler {
         }
       }
 
+      // إذا لم يكن هناك اسم أمر، نتوقف هنا (تجاهل الرسالة)
       if (!commandName) return;
 
-      /* ========= Command Resolve ========= */
+      /* ========= البحث عن الأمر ========= */
+      let threadData = null;
+      try {
+         threadData = await Threads.find(threadID);
+      } catch {}
+
       let command =
         this.commands.get(commandName) ||
         this.commands.get(this.aliases.get(commandName));
 
-      // Group aliases
+      // دعم الأسماء المستعارة الخاصة بالمجموعة (Group Aliases)
       if (!command && threadData?.data?.aliases) {
         for (const mainCmd in threadData.data.aliases) {
           if (threadData.data.aliases[mainCmd]?.includes(commandName)) {
@@ -112,14 +109,14 @@ export class CommandHandler {
         }
       }
 
+      // 🛑 التغيير الجذري هنا:
+      // إذا لم يتم العثور على الأمر، نخرج بصمت (return)
+      // لا نرسل "الأمر غير موجود" لأننا في نظام بدون بادئة
       if (!command) {
-        if (body?.startsWith(prefix)) {
-          return this.handleCommandNotFound(api, threadID, messageID, prefix);
-        }
-        return;
+        return; 
       }
 
-      /* ========= Permissions ========= */
+      /* ========= التحقق من الصلاحيات (Permissions) ========= */
       const isDeveloper = (this.config.ADMIN_IDS || []).includes(String(senderID));
       const security = await this.securityPipeline(command, event, isDeveloper);
 
@@ -127,21 +124,21 @@ export class CommandHandler {
         return api.sendMessage(security.response, threadID, messageID);
       }
 
-      /* ========= Cooldown ========= */
+      /* ========= التحقق من التهدئة (Cooldown) ========= */
       if (!isDeveloper) {
         const cd = command.cooldown || command.cooldowns || 5;
         const check = this.checkCooldown(command.name, senderID, cd);
         if (!check.allowed) {
           api.setMessageReaction("⏱️", messageID, () => {}, true);
           return api.sendMessage(
-            `⏱️ | انتظر ${check.timeLeft} ثانية.`,
+            `⏱️ | اهدأ قليلاً! انتظر ${check.timeLeft} ثانية.`,
             threadID,
             messageID
           );
         }
       }
 
-      /* ========= Execute ========= */
+      /* ========= تنفيذ الأمر (Execute) ========= */
       await command.execute({ ...this.arguments, args });
 
       this.handler.stats.commandsExecuted++;
@@ -182,20 +179,12 @@ export class CommandHandler {
   /* ======================
      🔧 Helpers
   ====================== */
-  async handleCommandNotFound(api, threadID, messageID, prefix) {
-    api.setMessageReaction("❌", messageID, () => {}, true);
-    return api.sendMessage(
-      `❌ | الأمر غير موجود. اكتب ${prefix}مساعدة`,
-      threadID,
-      messageID
-    );
-  }
-
+  
   handleCommandError(error, commandName) {
     const { api, event } = this.arguments;
     console.error(`❌ COMMAND CRASH [${commandName}]`, error);
     api.sendMessage(
-      `❌ | حدث خطأ في الأمر: ${commandName}\n🛑 السبب: ${error.message}`,
+      `❌ | حدث خطأ أثناء تنفيذ: ${commandName}\n🛑 السبب: ${error.message}`,
       event.threadID,
       event.messageID
     );
@@ -216,18 +205,18 @@ export class CommandHandler {
     const { api } = this.arguments;
     const { threadID, senderID, isGroup } = event;
 
-    // Developer only
+    // Developer only (Role 2)
     if (command.role === 2 && !isDeveloper) {
-      return { allowed: false, response: "⛔ | للمطور فقط." };
+      return { allowed: false, response: "⛔ | هذا الأمر للمطورين فقط." };
     }
 
-    // Admin only
+    // Admin only (Role 1)
     if (command.role === 1 && isGroup && !isDeveloper) {
       try {
         const info = await api.getThreadInfo(threadID);
         const isAdmin = info?.adminIDs?.some(a => String(a.id) === String(senderID));
         if (!isAdmin) {
-          return { allowed: false, response: "🛡️ | للمشرفين فقط." };
+          return { allowed: false, response: "🛡️ | هذا الأمر للمشرفين فقط." };
         }
       } catch {
         return { allowed: false, response: "⚠️ | فشل التحقق من الصلاحيات." };
