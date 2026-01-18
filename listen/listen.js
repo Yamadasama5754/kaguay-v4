@@ -1,63 +1,181 @@
 import { CommandHandler } from "../handler/handlers.js";
-import { threadsController, usersController, economyControllers, expControllers } from "../database/controllers/index.js";
-import { utils } from "../helper/index.js";
+import {
+  threadsController,
+  usersController,
+  economyController,
+  expController,
+  settingsController
+} from "../database/controllers/index.js";
+import config from "../BeatriceSetUp/config.js";
 
-/**
- * Create an event handler with specific objects and arguments.
- * @param {object} api - API object.
- * @param {object} event - Specific event.
- * @param {object} User - User object.
- * @param {object} Thread - Thread object.
- * @param {object} Economy - Economy object.
- * @param {object} Exp - Experience object.
- * @returns {CommandHandler} - Command handler.
- */
-const createHandler = (api, event, User, Thread, Economy, Exp) => {
-  const args = { api, event, Users: User, Threads: Thread, Economy, Exp };
-  return new CommandHandler(args);
-};
+// أنواع الأحداث التي نسجلها
+const TRACKED_EVENTS = new Set([
+  "message",
+  "message_reply",
+  "message_reaction",
+  "typ"
+]);
 
-/**
- * Handle the main event.
- * @param {object} options - Event handling options.
- */
-const listen = async ({ api, event }) => {
+export const listen = async ({ api, event, client }) => {
   try {
-    const { threadID, senderID, type, userID, from, isGroup } = event;
-    const Thread = threadsController({ api });
-    const User = usersController({ api });
-    const Economy = economyControllers({ api, event });
-    const Exp = expControllers({ api, event });
+    if (!event) return;
 
-    if (["message", "message_reply", "message_reaction", "typ"].includes(type)) {
-      if (isGroup) {
-        await Thread.create(threadID);
+    const {
+      threadID,
+      senderID,
+      userID,
+      from,
+      type,
+      body,
+      isGroup
+    } = event;
+
+    // تجاهل رسائل البوت نفسه
+    if (senderID === api.getCurrentUserID()) return;
+
+    /* ======================
+       ⚙️ Controllers (مرة واحدة)
+    ====================== */
+    const controllers = {
+      Threads: threadsController({ api }),
+      Users: usersController({ api }),
+      Economy: economyController({ api, event }),
+      Exp: expController({ api, event }),
+      Settings: settingsController({ api })
+    };
+
+    /* ======================
+       🧾 تسجيل المستخدم والكروب
+    ====================== */
+    if (TRACKED_EVENTS.has(type)) {
+      if (isGroup && threadID) {
+        controllers.Threads.create(threadID).catch(() => {});
       }
-      await User.create(senderID || userID || from);
+
+      const uid = senderID || userID || from;
+      if (uid) controllers.Users.create(uid).catch(() => {});
     }
 
-    global.kaguya = utils({ api, event });
+    const handler = new CommandHandler({
+      api,
+      event,
+      ...controllers
+    });
 
-    const handler = createHandler(api, event, User, Thread, Economy, Exp);
+    /* ======================
+       😀 Reactions
+    ====================== */
+    if (type === "message_reaction") {
+      await handler.handleReaction();
+      return;
+    }
+
+    /* ======================
+       🌐 Events العامة
+    ====================== */
     await handler.handleEvent();
 
-    switch (type) {
-      case "message":
-        await handler.handleCommand();
-        break;
-      case "message_reaction":
-        await handler.handleReaction();
-        break;
-      case "message_reply":
-        await handler.handleReply();
-        await handler.handleCommand();
-        break;
-      default:
-        break;
+    /* ======================
+       💬 الرسائل فقط
+    ====================== */
+    if (type !== "message" && type !== "message_reply") return;
+    if (!body || !body.trim()) return;
+
+    /* ======================
+       ⏱️ Rate Limit (مضاد سبام)
+    ====================== */
+    client.cooldowns ??= new Map();
+    const now = Date.now();
+    const last = client.cooldowns.get(senderID) || 0;
+
+    // تأخير بسيط جداً لمنع التكرار السريع
+    if (now - last < 700) return;
+    client.cooldowns.set(senderID, now);
+
+    /* ======================
+       ⚡ نظام الردود (Reply)
+    ====================== */
+    let replyData = null;
+
+    if (type === "message_reply" && event.messageReply) {
+      replyData = client.handler?.reply?.get(event.messageReply.messageID);
+
+      // انتهاء صلاحية الرد
+      if (replyData && replyData.expireAt && Date.now() > replyData.expireAt) {
+        client.handler.reply.delete(event.messageReply.messageID);
+        replyData = null;
+      }
     }
-  } catch (error) {
-    console.error("Error during event handling:", error);
+
+    // معالجة الردود (بدون التحقق من البادئة)
+    if (replyData && replyData.name) {
+      const cmd = client.commands?.get(replyData.name);
+      if (cmd?.onReply) {
+        try {
+          await cmd.onReply({
+            api,
+            event,
+            ...controllers,
+            reply: replyData
+          });
+        } catch (err) {
+          console.error(`❌ Reply Error [${replyData.name}]:`, err);
+        }
+      }
+      return;
+    }
+
+    /* ======================
+       ✂️ استخراج الأمر (بدون بادئة)
+    ====================== */
+    // هنا التغيير الجذري: نعتبر الرسالة كلها هي الأمر والمدخلات مباشرة
+    const input = body.trim();
+    const args = input.split(/\s+/);
+    const commandName = args.shift()?.toLowerCase(); // الكلمة الأولى هي الأمر
+
+    /* ======================
+       🔐 Maintenance Mode
+    ====================== */
+    const globalSettings = controllers.Settings.getGlobalSettings?.();
+    const isDeveloper = (config.ADMIN_IDS || []).some(
+      id => String(id) === String(senderID)
+    );
+
+    if (globalSettings?.botEnabled === false && !isDeveloper) {
+      return;
+    }
+
+    /* ======================
+       🛡️ Admin Only Mode
+    ====================== */
+    if (isGroup && !isDeveloper) {
+      const threadSettings = controllers.Settings.getThreadData?.(threadID);
+      if (threadSettings?.adminOnly?.enabled) {
+        const info = await api.getThreadInfo(threadID).catch(() => ({}));
+        const isAdmin = info?.adminIDs?.some(a => a.id === senderID);
+        if (!isAdmin) return;
+      }
+    }
+
+    /* ======================
+       🚀 تنفيذ الأمر
+    ====================== */
+    // نمرر البيانات للهاندلر ليتحقق هل "commandName" أمر حقيقي أم مجرد كلام
+    event.commandName = commandName;
+    event.args = args;
+
+    if (config.DEBUG) {
+      console.log("[DEBUG]", {
+        type,
+        senderID,
+        commandName,
+        args
+      });
+    }
+
+    await handler.handleCommand();
+
+  } catch (err) {
+    console.error("❌ Listen Error:", err);
   }
 };
-
-export { listen };
